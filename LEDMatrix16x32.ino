@@ -1,3 +1,4 @@
+#include <Adafruit_GFX.h>
 #include "RGBmatrixPanelAlternative.h"
 
 #define CLK 8  // MUST be on PORTB! (Use pin 11 on Mega)

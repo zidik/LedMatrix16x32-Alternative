@@ -134,7 +134,7 @@ void RGBmatrixPanelAlt::fillScreen(uint16_t c) {
 	}
 	else {
 		// Otherwise, need to handle it the long way:
-		Adafruit_GFX::fillScreen(c);
+		//Adafruit_GFX::fillScreen(c);
 	}
 }
 
