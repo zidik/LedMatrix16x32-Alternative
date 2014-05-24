@@ -80,6 +80,10 @@
   <ItemGroup>
     <ClInclude Include="Visual Micro\.LEDMatrix16x32.vsarduino.h" />
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\libraries\Adafruit_GFX\Adafruit_GFX.cpp" />
+    <ClCompile Include="RGBmatrixPanelAlternative.cpp" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

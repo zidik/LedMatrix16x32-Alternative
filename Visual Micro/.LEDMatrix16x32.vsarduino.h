@@ -42,13 +42,10 @@ extern "C" void __cxa_pure_virtual() {;}
 
 //
 //
-void begin(void);
-void drawPixel(int16_t x, int16_t y, uint16_t c);
-void updateDisplay(void);
-uint16_t Color333(uint8_t r, uint8_t g, uint8_t b);
-void dumpMatrix(void);
 
 #include "C:\Users\Mark\Arduino\hardware\arduino\cores\arduino\arduino.h"
 #include "C:\Users\Mark\Arduino\hardware\arduino\variants\standard\pins_arduino.h" 
 #include "P:\My Documents\Arduino\LEDMatrix16x32\LEDMatrix16x32.ino"
+#include "P:\My Documents\Arduino\LEDMatrix16x32\RGBmatrixPanelAlternative.cpp"
+#include "P:\My Documents\Arduino\LEDMatrix16x32\RGBmatrixPanelAlternative.h"
 #endif
