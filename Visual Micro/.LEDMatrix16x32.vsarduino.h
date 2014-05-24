@@ -42,6 +42,7 @@ extern "C" void __cxa_pure_virtual() {;}
 
 //
 //
+void begin(void);
 void drawPixel(int16_t x, int16_t y, uint16_t c);
 void updateDisplay(void);
 uint16_t Color333(uint8_t r, uint8_t g, uint8_t b);

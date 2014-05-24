@@ -1,38 +1,3 @@
-/*
-#include <gamma.h>
-#include <Adafruit_GFX.h>   // Core graphics library
-#include <RGBmatrixPanel.h> // Hardware-specific library
-
-#define F2(progmem_ptr) (const __FlashStringHelper *)progmem_ptr
-
-#define CLK 8  // MUST be on PORTB! (Use pin 11 on Mega)
-#define LAT A3
-#define OE  9
-#define A   A0
-#define B   A1
-#define C   A2
-
-RGBmatrixPanel matrix(A, B, C, CLK, LAT, OE, false);
-uint8_t color_r = 0;
-void setup() {
-	matrix.begin();
-	matrix.setTextWrap(false); // Allow text to run off right edge
-	matrix.setTextSize(2);
-}
-void lohop() {
-	byte i;
-	color_r = (color_r + 1) % 8;
-	matrix.drawPixel(1, 0, matrix.Color333(color_r, 0, 0));
-	matrix.swapBuffers(true);
-	delay(100);
-
-	
-}*/
-
-
-
-
-
 
 #define CLK 8  // MUST be on PORTB! (Use pin 11 on Mega)
 #define LAT A3
@@ -55,10 +20,10 @@ void lohop() {
 
 int nBanks = 4;
 int nbytesInDatarow = 64;
-uint8_t nPlanes = 3; //Minimum 2
+uint8_t nPlanes = 4; //Minimum 2
 
-unsigned char bank = nBanks - 1;
-unsigned char plane = nPlanes - 1;
+volatile uint8_t bank = nBanks - 1;
+volatile uint8_t plane = nPlanes - 1;
 
 uint8_t *matrixbuff[2];
 uint8_t sclkpin;
@@ -76,43 +41,7 @@ void setup()
 
 
 
-	pinMode(CLK, OUTPUT);
-	pinMode(LAT, OUTPUT);
-	pinMode(OE , OUTPUT);
-
-	pinMode(A, OUTPUT);
-	pinMode(B, OUTPUT);
-	pinMode(C, OUTPUT);
-
-	pinMode(R1, OUTPUT);
-	pinMode(G1, OUTPUT);
-	pinMode(B1, OUTPUT);
-	pinMode(R2, OUTPUT);
-	pinMode(G2, OUTPUT);
-	pinMode(B2, OUTPUT);
-
-	/// TEST START ///
-	digitalWrite(CLK, LOW); 
-	digitalWrite(LAT, LOW);
-	digitalWrite(OE, HIGH); //Disable output
-	
-	// choose bank
-	digitalWrite(A, LOW);
-	digitalWrite(B, LOW);
-	digitalWrite(C, LOW);
-
-
-	
-	bool dbuf = false;
-	int buffsize = nbytesInDatarow * nPlanes * nBanks;
-	int allocsize = (dbuf == true) ? (buffsize * 2) : buffsize;
-	if (NULL == (matrixbuff[0] = (uint8_t *)malloc(allocsize))) return;
-	memset(matrixbuff[0], 0, allocsize);
-	// If not double-buffered, both buffers then point to the same address:
-	matrixbuff[1] = (dbuf == true) ? &matrixbuff[0][buffsize] : matrixbuff[0];
-
-	sclkpin = digitalPinToBitMask(CLK);
-	buffptr = matrixbuff[0];
+	begin();
 
 	dumpMatrix();
 	
@@ -154,8 +83,7 @@ void setup()
 
 	matrixbuff[0][384] = 0b00000100;
 	*/
-	dumpMatrix();
-	
+	dumpMatrix();	
 
 }
 
@@ -178,90 +106,59 @@ void loop()
 		}
 
 		//matrixbuff[0][pixel_x_pos] = 0b00000100;
-		drawPixel((int16_t)pixel_x_pos, (int16_t)pixel_y_pos, Color333(0, 7, 0));
+		drawPixel((int16_t)pixel_x_pos, (int16_t)pixel_y_pos, Color333(0, pixel_y_pos % 8, 0));
+		
 		//dumpMatrix();
 		//delay(10);
 	}
-	
-	
-	
-	/*
-	int row = 0;
-	//SET DATA
-	if (row == 0){
-		buffptr = matrixbuff[0];
-		digitalWrite(R1, HIGH);
-		digitalWrite(G1, LOW);
-		digitalWrite(B1, LOW);
-		digitalWrite(R2, HIGH);
-		digitalWrite(G2, LOW);
-		digitalWrite(B2, LOW);
-	}
-	if (row == 1){
-		digitalWrite(R1, LOW);
-		digitalWrite(G1, LOW);
-		digitalWrite(B1, LOW);
-		digitalWrite(R2, LOW);
-		digitalWrite(G2, HIGH);
-		digitalWrite(B2, LOW);
-	}
-	if (row == 2){
-		digitalWrite(R1, LOW);
-		digitalWrite(G1, LOW);
-		digitalWrite(B1, LOW);
-		digitalWrite(R2, LOW);
-		digitalWrite(G2, LOW);
-		digitalWrite(B2, HIGH);
-	}
-	if (row == 3){
-		digitalWrite(R1, LOW);
-		digitalWrite(G1, LOW);
-		digitalWrite(B1, LOW);
-		digitalWrite(R2, LOW);
-		digitalWrite(G2, LOW);
-		digitalWrite(B2, LOW);
-	}
-	
+}
 
-	//Clock out data
-	for (int j = 0; j < 2; j++){
-		for (int i = 0; i < 32; i++){
-			digitalWrite(CLK, HIGH);
-			digitalWrite(CLK, LOW);
-			digitalWrite(R1, LOW);
-			digitalWrite(G1, LOW);
-			digitalWrite(B1, LOW);
-			digitalWrite(R2, LOW);
-			digitalWrite(G2, LOW);
-			digitalWrite(B2, LOW);
-		}
-	}
+void begin(void){
+	pinMode(CLK, OUTPUT);
+	pinMode(LAT, OUTPUT);
+	pinMode(OE, OUTPUT);
 
-	//LATCH
-	//Disable Output during bank switching
-	digitalWrite(OE, HIGH);
-	digitalWrite(LAT, HIGH);
-	bank = (bank + 1) % 4;
-	while (bank != row){
-		bank = (bank + 1) % 4;
-		if (bank & 0x1)
-			digitalWrite(A, HIGH);
-		else
-			digitalWrite(A, LOW);
+	pinMode(A, OUTPUT);
+	pinMode(B, OUTPUT);
+	pinMode(C, OUTPUT);
 
-		if (bank & 0x2)
-			digitalWrite(B, HIGH);
-		else
-			digitalWrite(B, LOW);
-	}
+	pinMode(R1, OUTPUT);
+	pinMode(G1, OUTPUT);
+	pinMode(B1, OUTPUT);
+	pinMode(R2, OUTPUT);
+	pinMode(G2, OUTPUT);
+	pinMode(B2, OUTPUT);
+
+	/// TEST START ///
+	digitalWrite(CLK, LOW);
 	digitalWrite(LAT, LOW);
-	digitalWrite(OE, LOW);
-	*/
+	digitalWrite(OE, HIGH); //Disable output
 
-	updateDisplay();
-	
-	
-	
+	// choose bank
+	digitalWrite(A, LOW);
+	digitalWrite(B, LOW);
+	digitalWrite(C, LOW);
+
+
+
+	bool dbuf = false;
+	int buffsize = nbytesInDatarow * nPlanes * nBanks;
+	int allocsize = (dbuf == true) ? (buffsize * 2) : buffsize;
+	if (NULL == (matrixbuff[0] = (uint8_t *)malloc(allocsize))) return;
+	memset(matrixbuff[0], 0, allocsize);
+	// If not double-buffered, both buffers then point to the same address:
+	matrixbuff[1] = (dbuf == true) ? &matrixbuff[0][buffsize] : matrixbuff[0];
+
+	sclkpin = digitalPinToBitMask(CLK);
+	buffptr = matrixbuff[0];
+
+	// Set up Timer1 for interrupt:
+	TCCR1A = _BV(WGM11); // Mode 14 (fast PWM), OC1A off
+	TCCR1B = _BV(WGM13) | _BV(WGM12) | _BV(CS10); // Mode 14, no prescale
+	ICR1 = 100;
+	TIMSK1 |= _BV(TOIE1); // Enable Timer1 interrupt
+	sei();                // Enable global interrupts
+
 }
 
 void drawPixel(int16_t x, int16_t y, uint16_t c) {
@@ -309,10 +206,19 @@ void drawPixel(int16_t x, int16_t y, uint16_t c) {
 
 }
 
+#define CALLOVERHEAD 60   // Actual value measured = 56
+#define LOOPTIME     200  // Actual value measured = 188
+
 void updateDisplay(void){
+	uint16_t t, duration;
+	
+
 	//Disable Output during bank switching
 	digitalWrite(OE, HIGH);
 	digitalWrite(LAT, HIGH);
+
+	duration = (((LOOPTIME * 2) + CALLOVERHEAD * 2) << plane) - CALLOVERHEAD;
+
 
 	plane++;
 	if (plane >= nPlanes){
@@ -342,7 +248,8 @@ void updateDisplay(void){
 	}
 	
 
-
+	ICR1 = duration; // Set interval for next interrupt
+	TCNT1 = 0;        // Restart interrupt timer
 	digitalWrite(LAT, LOW);
 	digitalWrite(OE, LOW);
 
@@ -404,4 +311,11 @@ void dumpMatrix(void) {
 	}
 	Serial.println("\n};");
 }
+
+ISR(TIMER1_OVF_vect, ISR_BLOCK) { // ISR_BLOCK important -- see notes later
+	updateDisplay();   // Call refresh func for active display
+	TIFR1 |= TOV1;                  // Clear Timer1 interrupt flag
+}
+
+
 
