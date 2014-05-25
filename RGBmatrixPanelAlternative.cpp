@@ -43,13 +43,25 @@ Modified by Mark Laane to suit cheap LED matrix alternatives.
 // For similar reasons, the clock pin is only semi-configurable...it can
 // be specified as any pin within a specific PORT register stated below.
 
-// Ports for "standard" boards (Arduino Uno, Duemilanove, etc.)
-#define DATAPORT PORTD
-#define DATADIR  DDRD
-#define SCLKPORT PORTB
+#if defined(__AVR_ATmega32U4__)
+	#define DATAPORT PORTB
+	#define DATADIR  DDRB
+	#define SCLKPORT PORTF
+#else
+	// Ports for "standard" boards (Arduino Uno, Duemilanove, etc.)
+	#define DATAPORT PORTD
+	#define DATADIR  DDRD
+	#define SCLKPORT PORTB
+#endif
+
 
 #define nBanks 4
-#define nPlanes 3 //Minimum 2
+#if defined(__AVR_ATmega32U4__)
+	#define nPlanes 4 // Atmega has enough RAM for 4 planes
+#else
+	#define nPlanes 3 //Minimum 2
+#endif
+
 #define nBytesInDatarow 64
 
 
@@ -120,7 +132,7 @@ void RGBmatrixPanelAlt::begin(void) {
 
 	// The high six bits of the data port are set as outputs;
 	// Might make this configurable in the future, but not yet.
-	DATADIR = B11111100;
+	DATADIR = B11111100;	
 	DATAPORT = 0;
 
 	// Set up Timer1 for interrupt:
@@ -172,7 +184,7 @@ uint16_t RGBmatrixPanelAlt::Color888(
 			(g << 7) | ((g & 0xC) << 3) |
 			(b << 1) | (b >> 3);
 	} // else linear (uncorrected) color
-	return ((r & 0xF8) << 11) | ((g & 0xFC) << 5) | (b >> 3);
+	return Color888(r, g ,b);
 }
 
 uint16_t RGBmatrixPanelAlt::ColorHSV(
@@ -335,7 +347,7 @@ ISR(TIMER1_OVF_vect, ISR_BLOCK) { // ISR_BLOCK important -- see notes later
 // Both numbers are rounded up slightly to allow a little wiggle room
 // should different compilers produce slightly different results.
 #define CALLOVERHEAD 60   // Actual value measured = 56
-#define LOOPTIME     200  // Actual value measured = 188
+#define LOOPTIME     360 //(200+ 160) //I use 160 cycles more (clocking in 32 bytes instead of 16)  // Actual value measured = 188
 // The "on" time for bitplane 0 (with the shortest BCM interval) can
 // then be estimated as LOOPTIME + CALLOVERHEAD * 2.  Each successive
 // bitplane then doubles the prior amount of time.  We can then
@@ -392,13 +404,8 @@ void RGBmatrixPanelAlt::updateDisplay(void){
 	// vertical scanning artifacts, in practice with this panel it causes
 	// a green 'ghosting' effect on black pixels, a much worse artifact.
 
-	if (true){
-		bool abc = true;
-	}
 	plane++;
-	if (true){
-		bool abc = true;
-	}
+
 	if (plane >= nPlanes){
 		plane = 0;
 		bank++;
