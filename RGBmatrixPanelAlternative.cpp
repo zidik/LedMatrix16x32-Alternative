@@ -1,13 +1,66 @@
-#include "RGBmatrixPanelAlternative.h"
+/*
+Alternative RGBmatrixPanel Arduino library for NON-Adafruit 16x32 and 32x32 RGB LED
+matrix panels.
 
+This version uses a few tricks to achieve better performance and/or
+lower CPU utilization:
+
+- To control LED brightness, traditional PWM is eschewed in favor of
+  Binary Code Modulation, which operates through a succession of periods
+  each twice the length of the preceeding one (rather than a direct
+  linear count a la PWM).  It's explained well here:
+
+    http://www.batsocks.co.uk/readme/art_bcm_1.htm
+
+  I was initially skeptical, but it works exceedingly well in practice!
+  And this uses considerably fewer CPU cycles than software PWM.
+
+- Although many control pins are software-configurable in the user's
+  code, a couple things are tied to specific PORT registers.  It's just
+  a lot faster this way -- port lookups take time.  Please see the notes
+  later regarding wiring on "alternative" Arduino boards.
+
+- A tiny bit of inline assembly language is used in the most speed-
+  critical section.  The C++ compiler wasn't making optimal use of the
+  instruction set in what seemed like an obvious chunk of code.  Since
+  it's only a few short instructions, this loop is also "unrolled" --
+  each iteration is stated explicitly, not through a control loop.
+
+Written by Limor Fried/Ladyada & Phil Burgess/PaintYourDragon for
+Adafruit Industries.
+BSD license, all text above must be included in any redistribution.
+
+Modified by Mark Laane to suit cheap LED matrix alternatives.
+
+*/
+
+#include "RGBmatrixPanelAlternative.h"
+#include "gamma.h"
+
+// A full PORT register is required for the data lines, though only
+// 6 output bits are used.  For performance reasons, the port # cannot
+// be changed via library calls, only by changing constants in the library.
+// For similar reasons, the clock pin is only semi-configurable...it can
+// be specified as any pin within a specific PORT register stated below.
+
+// Ports for "standard" boards (Arduino Uno, Duemilanove, etc.)
 #define DATAPORT PORTD
 #define DATADIR  DDRD
 #define SCLKPORT PORTB
 
 #define nBanks 4
-#define nPlanes 4 //Minimum 2
+#define nPlanes 3 //Minimum 2
 #define nBytesInDatarow 64
 
+
+// The fact that the display driver interrupt stuff is tied to the
+// singular Timer1 doesn't really take well to object orientation with
+// multiple RGBmatrixPanel instances.  The solution at present is to
+// allow instances, but only one is active at any given time, via its
+// begin() method.  The implementation is still incomplete in parts;
+// the prior active panel really should be gracefully disabled, and a
+// stop() method should perhaps be added...assuming multiple instances
+// are even an actual need.
 static RGBmatrixPanelAlt *activePanel = NULL;
 
 RGBmatrixPanelAlt::RGBmatrixPanelAlt(
@@ -46,22 +99,24 @@ RGBmatrixPanelAlt::RGBmatrixPanelAlt(
 	addrcport = portOutputRegister(digitalPinToPort(c));
 	addrcpin = digitalPinToBitMask(c);
 
-	buffptr = matrixbuff[0];
-
 	bank = nBanks - 1;
 	plane = nPlanes - 1;
+	swapflag = false;
+	backindex = 0;     // Array index of back buffer
 }
 
 void RGBmatrixPanelAlt::begin(void) {
-	activePanel = this;                      // For interrupt hander
+	backindex = 0;							// Back buffer
+	buffptr = matrixbuff[1 - backindex];	// -> front buffer
+	activePanel = this;                     // For interrupt hander
 
 	// Enable all comm & address pins as outputs, set default states:
-	pinMode(_sclk, OUTPUT); SCLKPORT &= ~sclkpin;  // Low
-	pinMode(_latch, OUTPUT); *latport &= ~latpin;   // Low
-	pinMode(_oe, OUTPUT); *oeport |= oepin;     // High (disable output)
-	pinMode(_a, OUTPUT); *addraport &= ~addrapin; // Low
-	pinMode(_b, OUTPUT); *addrbport &= ~addrbpin; // Low
-	pinMode(_c, OUTPUT); *addrcport &= ~addrcpin; // Low
+	pinMode(_sclk, OUTPUT);		SCLKPORT &= ~sclkpin;    // Low
+	pinMode(_latch, OUTPUT);	*latport &= ~latpin;     // Low
+	pinMode(_oe, OUTPUT);		*oeport |= oepin;        // High (disable output)
+	pinMode(_a, OUTPUT);		*addraport &= ~addrapin; // Low
+	pinMode(_b, OUTPUT);		*addrbport &= ~addrbpin; // Low
+	pinMode(_c, OUTPUT);		*addrcport &= ~addrcpin; // Low
 
 	// The high six bits of the data port are set as outputs;
 	// Might make this configurable in the future, but not yet.
@@ -69,12 +124,20 @@ void RGBmatrixPanelAlt::begin(void) {
 	DATAPORT = 0;
 
 	// Set up Timer1 for interrupt:
-	TCCR1A = _BV(WGM11); // Mode 14 (fast PWM), OC1A off
-	TCCR1B = _BV(WGM13) | _BV(WGM12) | _BV(CS10); // Mode 14, no prescale
-	ICR1 = 100;
+	TCCR1A	= _BV(WGM11); // Mode 14 (fast PWM), OC1A off
+	TCCR1B	= _BV(WGM13) | _BV(WGM12) | _BV(CS10); // Mode 14, no prescale
+	ICR1	= 100;
 	TIMSK1 |= _BV(TOIE1); // Enable Timer1 interrupt
 	sei();                // Enable global interrupts
 }
+
+// Original RGBmatrixPanel library used 3/3/3 color.  Later version used
+// 4/4/4.  Then Adafruit_GFX (core library used across all Adafruit
+// display devices now) standardized on 5/6/5.  The matrix still operates
+// internally on 4/4/4 color, but all the graphics functions are written
+// to expect 5/6/5...the matrix lib will truncate the color components as
+// needed when drawing.  These next functions are mostly here for the
+// benefit of older code using one of the original color formats.
 
 // Promote 3/3/3 RGB to Adafruit_GFX 5/6/5
 uint16_t RGBmatrixPanelAlt::Color333(uint8_t r, uint8_t g, uint8_t b) {
@@ -84,17 +147,106 @@ uint16_t RGBmatrixPanelAlt::Color333(uint8_t r, uint8_t g, uint8_t b) {
 		((b & 0x7) << 2) | ((b & 0x6) >> 1);
 }
 
+// Promote 4/4/4 RGB to Adafruit_GFX 5/6/5
+uint16_t RGBmatrixPanelAlt::Color444(uint8_t r, uint8_t g, uint8_t b) {
+	// RRRRrGGGGggBBBBb
+	return ((r & 0xF) << 12) | ((r & 0x8) << 8) |
+		((g & 0xF) << 7) | ((g & 0xC) << 3) |
+		((b & 0xF) << 1) | ((b & 0x8) >> 3);
+}
+
+// Demote 8/8/8 to Adafruit_GFX 5/6/5
+// If no gamma flag passed, assume linear color
+uint16_t RGBmatrixPanelAlt::Color888(uint8_t r, uint8_t g, uint8_t b) {
+	return ((r & 0xF8) << 11) | ((g & 0xFC) << 5) | (b >> 3);
+}
+
+// 8/8/8 -> gamma -> 5/6/5
+uint16_t RGBmatrixPanelAlt::Color888(
+	uint8_t r, uint8_t g, uint8_t b, boolean gflag) {
+	if (gflag) { // Gamma-corrected color?
+		r = pgm_read_byte(&gamma[r]); // Gamma correction table maps
+		g = pgm_read_byte(&gamma[g]); // 8-bit input to 4-bit output
+		b = pgm_read_byte(&gamma[b]);
+		return (r << 12) | ((r & 0x8) << 8) | // 4/4/4 -> 5/6/5
+			(g << 7) | ((g & 0xC) << 3) |
+			(b << 1) | (b >> 3);
+	} // else linear (uncorrected) color
+	return ((r & 0xF8) << 11) | ((g & 0xFC) << 5) | (b >> 3);
+}
+
+uint16_t RGBmatrixPanelAlt::ColorHSV(
+	long hue, uint8_t sat, uint8_t val, boolean gflag) {
+
+	uint8_t  r, g, b, lo;
+	uint16_t s1, v1;
+
+	// Hue
+	hue %= 1536;             // -1535 to +1535
+	if (hue < 0) hue += 1536; //     0 to +1535
+	lo = hue & 255;          // Low byte  = primary/secondary color mix
+	switch (hue >> 8) {       // High byte = sextant of colorwheel
+	case 0: r = 255; g = lo; b = 0; break; // R to Y
+	case 1: r = 255 - lo; g = 255; b = 0; break; // Y to G
+	case 2: r = 0; g = 255; b = lo; break; // G to C
+	case 3: r = 0; g = 255 - lo; b = 255; break; // C to B
+	case 4: r = lo; g = 0; b = 255; break; // B to M
+	default: r = 255; g = 0; b = 255 - lo; break; // M to R
+	}
+
+	// Saturation: add 1 so range is 1 to 256, allowig a quick shift operation
+	// on the result rather than a costly divide, while the type upgrade to int
+	// avoids repeated type conversions in both directions.
+	s1 = sat + 1;
+	r = 255 - (((255 - r) * s1) >> 8);
+	g = 255 - (((255 - g) * s1) >> 8);
+	b = 255 - (((255 - b) * s1) >> 8);
+
+	// Value (brightness) & 16-bit color reduction: similar to above, add 1
+	// to allow shifts, and upgrade to int makes other conversions implicit.
+	v1 = val + 1;
+	if (gflag) { // Gamma-corrected color?
+		r = pgm_read_byte(&gamma[(r * v1) >> 8]); // Gamma correction table maps
+		g = pgm_read_byte(&gamma[(g * v1) >> 8]); // 8-bit input to 4-bit output
+		b = pgm_read_byte(&gamma[(b * v1) >> 8]);
+	}
+	else { // linear (uncorrected) color
+		r = (r * v1) >> 12; // 4-bit results
+		g = (g * v1) >> 12;
+		b = (b * v1) >> 12;
+	}
+	return (r << 12) | ((r & 0x8) << 8) | // 4/4/4 -> 5/6/5
+		(g << 7) | ((g & 0xC) << 3) |
+		(b << 1) | (b >> 3);
+}
+
 void RGBmatrixPanelAlt::drawPixel(int16_t x, int16_t y, uint16_t c) {
-	uint8_t r, g, b, bit, limit, *ptr;
+	uint8_t r, g, b, limit, *ptr;
+
+	if ((x < 0) || (x >= _width) || (y < 0) || (y >= _height)) return;
+
+	switch (rotation) {
+	case 1:
+		swap(x, y);
+		x = WIDTH - 1 - x;
+		break;
+	case 2:
+		x = WIDTH - 1 - x;
+		y = HEIGHT - 1 - y;
+		break;
+	case 3:
+		swap(x, y);
+		y = HEIGHT - 1 - y;
+		break;
+	}
+
 	// Adafruit_GFX uses 16-bit color in 5/6/5 format, while matrix needs
 	// 4/4/4.  Pluck out relevant bits while separating into R,G,B:
 	r = c >> 12;        // RRRRrggggggbbbbb
 	g = (c >> 7) & 0xF; // rrrrrGGGGggbbbbb
 	b = (c >> 1) & 0xF; // rrrrrggggggBBBBb
 
-	// Loop counter stuff
-	limit = 1 << nPlanes;
-
+	
 
 	uint16_t baseaddr = (y % 4) * nBytesInDatarow * nPlanes;
 	if (y % 8 < 4){
@@ -103,9 +255,13 @@ void RGBmatrixPanelAlt::drawPixel(int16_t x, int16_t y, uint16_t c) {
 	else{
 		baseaddr += (x >> 3) * 16 + x % 8;
 	}
-	ptr = &matrixbuff[0][baseaddr];
+
+	// Loop counter stuff
+	limit = 1 << nPlanes;
+
+	ptr = &matrixbuff[backindex][baseaddr];
 	if (y < 8){
-		for (bit = 1; bit < limit; bit <<= 1) {
+		for (uint8_t bit = 1; bit < limit; bit <<= 1) {
 			*ptr &= ~B00011100;             // Mask out R,G,B in one op
 			if (r & bit) *ptr |= B00000100;  // Plane N R: bit 2
 			if (g & bit) *ptr |= B00001000;  // Plane N G: bit 3
@@ -114,8 +270,7 @@ void RGBmatrixPanelAlt::drawPixel(int16_t x, int16_t y, uint16_t c) {
 		}
 	}
 	else{
-
-		for (bit = 1; bit < limit; bit <<= 1) {
+		for (uint8_t bit = 1; bit < limit; bit <<= 1) {
 			*ptr &= ~B11100000;             // Mask out R,G,B in one op
 			if (r & bit) *ptr |= B00100000;  // Plane N R: bit 5
 			if (g & bit) *ptr |= B01000000;  // Plane N G: bit 6
@@ -130,21 +285,87 @@ void RGBmatrixPanelAlt::fillScreen(uint16_t c) {
 		// For black or white, all bits in frame buffer will be identically
 		// set or unset (regardless of weird bit packing), so it's OK to just
 		// quickly memset the whole thing:
-		memset(matrixbuff[0], c, nBytesInDatarow * nPlanes * nBanks);
+		memset(matrixbuff[backindex], c, nBytesInDatarow * nPlanes * nBanks);
 	}
 	else {
 		// Otherwise, need to handle it the long way:
-		//Adafruit_GFX::fillScreen(c);
+		Adafruit_GFX::fillScreen(c);
 	}
 }
+
+// Return address of back buffer -- can then load/store data directly
+uint8_t *RGBmatrixPanelAlt::backBuffer() {
+	return matrixbuff[backindex];
+}
+
+// For smooth animation -- drawing always takes place in the "back" buffer;
+// this method pushes it to the "front" for display.  Passing "true", the
+// updated display contents are then copied to the new back buffer and can
+// be incrementally modified.  If "false", the back buffer then contains
+// the old front buffer contents -- your code can either clear this or
+// draw over every pixel.  (No effect if double-buffering is not enabled.)
+void RGBmatrixPanelAlt::swapBuffers(boolean copy) {
+	if (matrixbuff[0] != matrixbuff[1]) {
+		// To avoid 'tearing' display, actual swap takes place in the interrupt
+		// handler, at the end of a complete screen refresh cycle.
+		swapflag = true;                  // Set flag here, then...
+		while (swapflag == true) delay(1); // wait for interrupt to clear it
+		if (copy == true)
+			memcpy(matrixbuff[backindex], matrixbuff[1 - backindex], nBytesInDatarow * nPlanes * nBanks);
+	}
+}
+
+// -------------------- Interrupt handler stuff --------------------
 
 ISR(TIMER1_OVF_vect, ISR_BLOCK) { // ISR_BLOCK important -- see notes later
 	activePanel->updateDisplay();   // Call refresh func for active display
 	TIFR1 |= TOV1;                  // Clear Timer1 interrupt flag
 }
 
+// Two constants are used in timing each successive BCM interval.
+// These were found empirically, by checking the value of TCNT1 at
+// certain positions in the interrupt code.
+// CALLOVERHEAD is the number of CPU 'ticks' from the timer overflow
+// condition (triggering the interrupt) to the first line in the
+// updateDisplay() method.  It's then assumed (maybe not entirely 100%
+// accurately, but close enough) that a similar amount of time will be
+// needed at the opposite end, restoring regular program flow.
+// LOOPTIME is the number of 'ticks' spent inside the shortest data-
+// issuing loop (not actually a 'loop' because it's unrolled, but eh).
+// Both numbers are rounded up slightly to allow a little wiggle room
+// should different compilers produce slightly different results.
 #define CALLOVERHEAD 60   // Actual value measured = 56
 #define LOOPTIME     200  // Actual value measured = 188
+// The "on" time for bitplane 0 (with the shortest BCM interval) can
+// then be estimated as LOOPTIME + CALLOVERHEAD * 2.  Each successive
+// bitplane then doubles the prior amount of time.  We can then
+// estimate refresh rates from this:
+// 4 bitplanes = 320 + 640 + 1280 + 2560 = 4800 ticks per row.
+// 4800 ticks * 16 rows (for 32x32 matrix) = 76800 ticks/frame.
+// 16M CPU ticks/sec / 76800 ticks/frame = 208.33 Hz.
+// Actual frame rate will be slightly less due to work being done
+// during the brief "LEDs off" interval...it's reasonable to say
+// "about 200 Hz."  The 16x32 matrix only has to scan half as many
+// rows...so we could either double the refresh rate (keeping the CPU
+// load the same), or keep the same refresh rate but halve the CPU
+// load.  We opted for the latter.
+// Can also estimate CPU use: bitplanes 1-3 all use 320 ticks to
+// issue data (the increasing gaps in the timing invervals are then
+// available to other code), and bitplane 0 takes 920 ticks out of
+// the 2560 tick interval.
+// 320 * 3 + 920 = 1880 ticks spent in interrupt code, per row.
+// From prior calculations, about 4800 ticks happen per row.
+// CPU use = 1880 / 4800 = ~39% (actual use will be very slightly
+// higher, again due to code used in the LEDs off interval).
+// 16x32 matrix uses about half that CPU load.  CPU time could be
+// further adjusted by padding the LOOPTIME value, but refresh rates
+// will decrease proportionally, and 200 Hz is a decent target.
+
+// The flow of the interrupt can be awkward to grasp, because data is
+// being issued to the LED matrix for the *next* bitplane and/or row
+// while the *current* plane/row is being shown.  As a result, the
+// counter variables change between past/present/future tense in mid-
+// function...hopefully tenses are sufficiently commented.
 
 void RGBmatrixPanelAlt::updateDisplay(void){
 	uint8_t  tick, tock, *ptr;
@@ -155,17 +376,39 @@ void RGBmatrixPanelAlt::updateDisplay(void){
 	*oeport |= oepin;  // Disable LED output during row/plane switchover
 	*latport |= latpin; // Latch data loaded during *prior* interrup
 
+	// Calculate time to next interrupt BEFORE incrementing plane #.
+	// This is because duration is the display time for the data loaded
+	// on the PRIOR interrupt.  CALLOVERHEAD is subtracted from the
+	// result because that time is implicit between the timer overflow
+	// (interrupt triggered) and the initial LEDs-off line at the start
+	// of this method.
 	duration = (((LOOPTIME * 2) + CALLOVERHEAD * 2) << plane) - CALLOVERHEAD;
 
+	// Borrowing a technique here from Ray's Logic:
+	// www.rayslogic.com/propeller/Programming/AdafruitRGB/AdafruitRGB.htm
+	// This code cycles through all four planes for each scanline before
+	// advancing to the next line.  While it might seem beneficial to
+	// advance lines every time and interleave the planes to reduce
+	// vertical scanning artifacts, in practice with this panel it causes
+	// a green 'ghosting' effect on black pixels, a much worse artifact.
 
+	if (true){
+		bool abc = true;
+	}
 	plane++;
+	if (true){
+		bool abc = true;
+	}
 	if (plane >= nPlanes){
 		plane = 0;
 		bank++;
 		if (bank >= nBanks){
 			bank = 0;
-			/*Swapping*/
-			buffptr = matrixbuff[0];
+			if (swapflag == true) {    // Swap front/back buffers if requested
+				backindex = 1 - backindex;
+				swapflag = false;
+			}
+			buffptr = matrixbuff[1-backindex];
 		}
 	}
 	else if (plane == 1){
@@ -182,17 +425,32 @@ void RGBmatrixPanelAlt::updateDisplay(void){
 	ICR1 = duration; // Set interval for next interrupt
 	TCNT1 = 0;        // Restart interrupt timer
 
-	//SWITCH??
 	*oeport &= ~oepin;   // Re-enable output
 	*latport &= ~latpin;  // Latch down
 
-
+	// Record current state of SCLKPORT register, as well as a second
+	// copy with the clock bit set.  This makes the innnermost data-
+	// pushing loops faster, as they can just set the PORT state and
+	// not have to load/modify/store bits every single time.  It's a
+	// somewhat rude trick that ONLY works because the interrupt
+	// handler is set ISR_BLOCK, halting any other interrupts that
+	// might otherwise also be twiddling the port at the same time
+	// (else this would clobber them).
 	tock = SCLKPORT;
 	tick = tock | sclkpin;
 
+
+	// buffptr, being 'volatile' type, doesn't take well to optimization.
+	// A local register copy can speed some things up:
 	ptr = (uint8_t *)buffptr;
 
+	// Planes copy bytes directly from RAM to PORT without unpacking.
+	// The least 2 bits (used for plane 0 data) are presumed masked out
+	// by the port direction bits.
 
+	// A tiny bit of inline assembly is used; compiler doesn't pick
+	// up on opportunity for post-increment addressing mode.
+	// 5 instruction ticks per 'pew' = 160 ticks total
 	#define pew asm volatile(               \
 		"ld  __tmp_reg__, %a[ptr]+"    "\n\t"   \
 		"out %[data]    , __tmp_reg__" "\n\t"   \

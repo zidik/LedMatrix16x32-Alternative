@@ -42,10 +42,12 @@ extern "C" void __cxa_pure_virtual() {;}
 
 //
 //
+void runPixel();
 
 #include "C:\Users\Mark\Arduino\hardware\arduino\cores\arduino\arduino.h"
 #include "C:\Users\Mark\Arduino\hardware\arduino\variants\standard\pins_arduino.h" 
 #include "P:\My Documents\Arduino\LEDMatrix16x32\LEDMatrix16x32.ino"
 #include "P:\My Documents\Arduino\LEDMatrix16x32\RGBmatrixPanelAlternative.cpp"
 #include "P:\My Documents\Arduino\LEDMatrix16x32\RGBmatrixPanelAlternative.h"
+#include "P:\My Documents\Arduino\LEDMatrix16x32\gamma.h"
 #endif

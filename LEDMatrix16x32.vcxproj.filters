@@ -21,12 +21,12 @@
     <ClInclude Include="Visual Micro\.LEDMatrix16x32.vsarduino.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="RGBmatrixPanelAlternative.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="RGBmatrixPanelAlternative.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="..\libraries\Adafruit_GFX\Adafruit_GFX.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
